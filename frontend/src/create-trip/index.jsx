@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import MapView from "../components/ui/MapView";
+import UserSidebar from "../components/sidebar/UserSidebar";
 
 const OptionSelector = ({ title, options, selected, onSelect }) => (
   <div>
@@ -25,6 +26,9 @@ const OptionSelector = ({ title, options, selected, onSelect }) => (
 
 function CreateTrip() {
   const navigate = useNavigate();
+  const user = JSON.parse(localStorage.getItem("user"));
+  const token = localStorage.getItem("token"); // ✅ get token from localStorage
+
   const [formData, setFormData] = useState({
     destination: "",
     days: 1,
@@ -65,6 +69,7 @@ function CreateTrip() {
     if (formData.days < 1) return "Days must be at least 1.";
     if (!formData.budget) return "Select a budget.";
     if (!formData.travelWith) return "Who are you traveling with?";
+    if (!token) return "You must be logged in to generate a trip."; // ✅ require login
     return null;
   };
 
@@ -103,130 +108,141 @@ function CreateTrip() {
 
   // ---------- SUBMIT FORM ----------
   const handleSubmit = async () => {
-    const errorMsg = validateForm();
-    if (errorMsg) {
-      setError(errorMsg);
+  const errorMsg = validateForm();
+  if (errorMsg) {
+    setError(errorMsg);
+    return;
+  }
+
+  setLoading(true);
+  setError("");
+
+  try {
+    const res = await fetch("http://localhost:5000/generate-trip", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        destination: formData.destination,
+        days: formData.days,
+        budget: formData.budget,
+        travelWith: formData.travelWith, // ✅ match backend
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      setError(data.error || "Server error");
       return;
     }
 
-    setLoading(true);
-    setError("");
+    // Pass only the trip object to TripResult
+    navigate("/trip-result", {
+      state: {
+        trip: data.trip, // ✅ extract the trip object
+        formData,
+      },
+    });
+  } catch (err) {
+    console.error("Trip generation error:", err);
+    setError("Server is unreachable");
+  } finally {
+    setLoading(false);
+  }
+};
 
-    try {
-      const res = await fetch("http://localhost:5000/generate-trip", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(formData),
-      });
-
-      const tripData = await res.json();
-
-      if (!res.ok) {
-        setError(tripData.error || "Server error");
-        return;
-      }
-
-      // ✅ Correct navigate structure
-      navigate("/trip-result", {
-        state: {
-          trip: tripData,
-          formData,
-        },
-      });
-    } catch (err) {
-      console.error("Trip generation error:", err);
-      setError("Server is unreachable");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
-    <div className="sm:px-10 md:px-32 lg:px-56 xl:px-10 px-5 mt-10 flex flex-col min-h-screen">
-      <h2 className="font-bold text-3xl mb-6">Tell us your travel preferences...</h2>
+    <div className="flex min-h-screen">
+      {user && <UserSidebar />}
 
-      {error && <p className="mt-3 text-red-600 font-medium">{error}</p>}
+      <div className="flex-1 sm:px-10 md:px-32 lg:px-56 xl:px-10 px-5 mt-10 flex flex-col">
+        <h2 className="font-bold text-3xl mb-6">
+          Tell us your travel preferences...
+        </h2>
 
-      <div className="space-y-6 flex-grow">
-        {/* DESTINATION */}
-        <div>
-          <h3 className="text-xl font-medium mb-2">Destination:</h3>
-          <input
-            type="text"
-            placeholder="Search destination..."
-            value={query}
-            onChange={(e) => fetchPlaces(e.target.value)}
-            className="border p-2 rounded w-full"
+        {error && <p className="mt-3 text-red-600 font-medium">{error}</p>}
+
+        <div className="space-y-6 flex-grow">
+          {/* DESTINATION */}
+          <div>
+            <h3 className="text-xl font-medium mb-2">Destination:</h3>
+            <input
+              type="text"
+              placeholder="Search destination..."
+              value={query}
+              onChange={(e) => fetchPlaces(e.target.value)}
+              className="border p-2 rounded w-full"
+            />
+
+            {places.length > 0 && (
+              <ul className="border mt-2 max-h-40 overflow-y-auto bg-white shadow rounded">
+                {places.map((place) => (
+                  <li
+                    key={place.place_id}
+                    className="p-2 hover:bg-gray-100 cursor-pointer"
+                    onClick={() => handlePlaceSelect(place)}
+                  >
+                    {place.display_name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* DAYS */}
+          <div>
+            <h3 className="text-xl font-medium mb-2">How many days?</h3>
+            <input
+              type="number"
+              name="days"
+              min="1"
+              value={formData.days}
+              onChange={handleInputChange}
+              className="border p-2 rounded w-full"
+            />
+          </div>
+
+          {/* BUDGET */}
+          <OptionSelector
+            title="Budget"
+            options={budgetOptions}
+            selected={formData.budget}
+            onSelect={(value) => handleOptionSelect("budget", value)}
           />
 
-          {places.length > 0 && (
-            <ul className="border mt-2 max-h-40 overflow-y-auto bg-white shadow rounded">
-              {places.map((place) => (
-                <li
-                  key={place.place_id}
-                  className="p-2 hover:bg-gray-100 cursor-pointer"
-                  onClick={() => handlePlaceSelect(place)}
-                >
-                  {place.display_name}
-                </li>
-              ))}
-            </ul>
+          {/* TRAVEL WITH */}
+          <OptionSelector
+            title="Who are you traveling with?"
+            options={travelWithOptions}
+            selected={formData.travelWith}
+            onSelect={(value) => handleOptionSelect("travelWith", value)}
+          />
+
+          {/* MAP */}
+          {coords && (
+            <div className="mt-6">
+              <h3 className="font-medium mb-2">Location Preview:</h3>
+              <MapView lat={coords.lat} lon={coords.lon} place={formData.destination} />
+            </div>
           )}
         </div>
 
-        {/* DAYS */}
-        <div>
-          <h3 className="text-xl font-medium mb-2">How many days?</h3>
-          <input
-            type="number"
-            name="days"
-            min="1"
-            value={formData.days}
-            onChange={handleInputChange}
-            className="border p-2 rounded w-full"
-          />
-        </div>
-
-        {/* BUDGET */}
-        <OptionSelector
-          title="Budget"
-          options={budgetOptions}
-          selected={formData.budget}
-          onSelect={(value) => handleOptionSelect("budget", value)}
-        />
-
-        {/* TRAVEL WITH */}
-        <OptionSelector
-          title="Who are you traveling with?"
-          options={travelWithOptions}
-          selected={formData.travelWith}
-          onSelect={(value) => handleOptionSelect("travelWith", value)}
-        />
-
-        {/* MAP PREVIEW */}
-        {coords && (
-          <div className="mt-6">
-            <h3 className="font-medium mb-2">Location Preview:</h3>
-            <MapView lat={coords.lat} lon={coords.lon} place={formData.destination} />
-          </div>
-        )}
+        <button
+          className={`mt-6 mb-10 px-6 py-3 rounded font-bold ${
+            loading
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-green-600 hover:bg-green-700 text-white"
+          }`}
+          onClick={handleSubmit}
+          disabled={loading}
+        >
+          {loading ? "Generating Trip..." : "Generate Trip"}
+        </button>
       </div>
-
-      <button
-        className={`mt-6 px-6 py-3 rounded font-bold ${
-          loading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700 text-white"
-        }`}
-        onClick={handleSubmit}
-        disabled={loading}
-      >
-        {loading ? "Generating Trip..." : "Generate Trip"}
-      </button>
-
-      <footer className="mt-10 py-6 text-center text-gray-500 border-t">
-        &copy; 2025 AI Travel Planner. All rights reserved.
-      </footer>
     </div>
   );
 }
