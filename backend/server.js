@@ -1,23 +1,38 @@
-
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import fetch from "node-fetch";
 import Groq from "groq-sdk";
+import mongoose from "mongoose";
+
+import authRoutes from "./routes/auth.js";
+import authMiddleware from "./middleware/authMiddleware.js";
+import Trip from "./models/Trip.js";
 
 dotenv.config();
 
-
 const app = express();
+
+// ================== MIDDLEWARE ==================
 app.use(express.json());
 app.use(cors());
 
-// ---------------- INITIALIZE GROQ ----------------
-const client = new Groq({
+// ================== CONNECT MONGODB ==================
+if (process.env.MONGO_URI) {
+  mongoose
+    .connect(process.env.MONGO_URI)
+    .then(() => console.log("✅ MongoDB connected"))
+    .catch((err) => console.log("❌ MongoDB Error:", err));
+} else {
+  console.log("⚠️ MONGO_URI not found in .env — Auth will fail without DB");
+}
+
+// ================== INITIALIZE GROQ ==================
+const groqClient = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-// ---------------- HELPER: GET COORDINATES ----------------
+// ================== HELPER: GET COORDINATES ==================
 async function getCoordinates(place) {
   if (!place) return { lat: null, lon: null };
 
@@ -36,13 +51,16 @@ async function getCoordinates(place) {
       return { lat: data[0].lat, lon: data[0].lon };
     }
   } catch (e) {
-    console.log("Coordinate Fetch Error:", e);
+    console.log("❌ Coordinate Fetch Error:", e);
   }
 
   return { lat: null, lon: null };
 }
 
-// ---------------- PLACE AUTOCOMPLETE API ----------------
+// ================== AUTH ROUTES ==================
+app.use("/auth", authRoutes);
+
+// ================== PLACE SEARCH ==================
 app.get("/places", async (req, res) => {
   const query = req.query.q;
   if (!query) return res.json([]);
@@ -67,13 +85,13 @@ app.get("/places", async (req, res) => {
 
     res.json(cleaned);
   } catch (err) {
-    console.error("Places API Error:", err);
+    console.error("❌ Places API Error:", err);
     res.status(500).json({ error: "Failed to fetch places" });
   }
 });
 
-// ---------------- GROQ AI TRIP GENERATOR ----------------
-app.post("/generate-trip", async (req, res) => {
+// ================== AI TRIP GENERATOR + SAVE DB ==================
+app.post("/generate-trip", authMiddleware, async (req, res) => {
   const { destination, days, budget, travelWith } = req.body;
 
   if (!destination || !days) {
@@ -115,22 +133,18 @@ Return ONLY VALID JSON in this format:
   ]
 }
 
-ONLY JSON. No markdown. 
-    `;
+ONLY JSON. No markdown.
+`;
 
-    // 🔥 GROQ API CALL
-    const completion = await client.chat.completions.create({
+    const completion = await groqClient.chat.completions.create({
       model: "llama-3.1-8b-instant",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.3,
     });
 
     let aiText = completion.choices[0].message.content || "";
-
-    // Remove code blocks if AI adds them
     aiText = aiText.replace(/```json|```/g, "").trim();
 
-    // Convert AI response → JSON
     let trip;
     try {
       trip = JSON.parse(aiText);
@@ -141,21 +155,41 @@ ONLY JSON. No markdown.
       });
     }
 
-    // Add coordinates for each itinerary location
     for (const day of trip.itinerary) {
       const coords = await getCoordinates(day.location);
       day.lat = coords.lat;
       day.lon = coords.lon;
     }
 
-    res.json(trip);
+    // ================== SAVE TRIP ==================
+    await Trip.create({
+      userId: req.user.id,
+      destination,
+      days,
+      budget,
+      travelWith,
+      result: trip,
+    });
+
+    res.json({
+      success: true,
+      trip,
+    });
   } catch (err) {
     console.error("🔥 Groq Trip Error:", err);
     res.status(500).json({ error: "AI failed to generate trip" });
   }
 });
 
-// ---------------- START SERVER ----------------
+// ================== TRIP HISTORY ==================
+app.get("/my-trips", authMiddleware, async (req, res) => {
+  const trips = await Trip.find({ userId: req.user.id }).sort({
+    createdAt: -1,
+  });
+  res.json(trips);
+});
+
+// ================== START SERVER ==================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log(`🚀 AI Trip Planner Server running on port ${PORT}`)
