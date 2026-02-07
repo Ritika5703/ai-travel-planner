@@ -7,8 +7,6 @@ import nodemailer from "nodemailer";
 import authMiddleware from "../middleware/authMiddleware.js";
 import Trip from "../models/Trip.js"; // only if you have Trip model
 
-
-
 const router = express.Router();
 
 /* ================= REGISTER ================= */
@@ -96,11 +94,9 @@ router.post("/login", async (req, res) => {
     }
 
     // 4️⃣ Generate token
-    const token = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "1d" }
-    );
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "1d",
+    });
 
     // 5️⃣ Success response
     res.status(200).json({
@@ -185,7 +181,6 @@ router.post("/reset-password", async (req, res) => {
     await user.save();
 
     res.json({ success: true, msg: "Password reset successfully" });
-
   } catch (err) {
     res.status(500).json({ success: false, msg: "Server error" });
   }
@@ -215,6 +210,61 @@ router.get("/me", authMiddleware, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, msg: err.message });
+  }
+});
+
+/* ================= UPDATE PROFILE ================= */
+router.put("/update-profile", authMiddleware, async (req, res) => {
+  try {
+    // Check if req.body exists and has required fields
+    if (!req.body || !req.body.name || !req.body.email) {
+      return res.status(400).json({
+        success: false,
+        msg: "Name and email are required in the request body",
+      });
+    }
+
+    const { name, email } = req.body;
+
+    // Additional validation (e.g., email format) if needed
+    // Check if email is already used by another user
+    const emailExists = await User.findOne({
+      email,
+      _id: { $ne: req.user.id },
+    });
+
+    if (emailExists) {
+      return res.status(400).json({
+        success: false,
+        msg: "Email already in use",
+      });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { name, email },
+      { new: true },
+    ).select("-password");
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        msg: "User not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        name: updatedUser.name,
+        email: updatedUser.email,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      msg: err.message,
+    });
   }
 });
 
